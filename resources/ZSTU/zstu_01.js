@@ -28,8 +28,10 @@ const ZSTU_CONFIG = {
     hosts: {
         // WebVPN 门户（登录页、认证页、资源列表）—— import_url 指向这里
         webvpn: [
-            'webvpn.zstu.edu.cn',                    // ★ WebVPN 门户主页
+            'sslvpn.zstu.edu.cn',                    // ★ SSLVPN 门户（import_url 指向这里）
+            'webvpn.zstu.edu.cn',                    // WebVPN 门户（备用）
             'sso-443.webvpn.zstu.edu.cn',           // 统一身份认证
+            'sso.zstu.edu.cn',                       // 直连统一身份认证
             'jwglxt-443.webvpn.zstu.edu.cn',        // 教务系统（正方）
             'jwglxt.webvpn.zstu.edu.cn'             // 教务系统备用域名
         ],

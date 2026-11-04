@@ -1,8 +1,15 @@
+# resources/ZSTU/adapters.yaml
 adapters:
   - adapter_id: "ZSTU_01"
     adapter_name: "浙江理工大学正方教务"
     category: "BACHELOR_AND_ASSOCIATE"
     asset_js_path: "zstu_01.js"
-    import_url: "https://jwglxt-443.webvpn.zstu.edu.cn/jwglxt/xtgl/login_slogin.html"
+    # ★ 浙理工必须从 WebVPN 门户进入。
+    #   直接访问教务系统地址（jwglxt-443.webvpn.zstu.edu.cn/...）会显示
+    #   「用户名或密码错误」—— 那是统一身份认证在拦截，不是学号密码输错。
+    #   正确流程：webvpn.zstu.edu.cn 登录 → 资源列表点「教务系统」→ 教务平台
+    #   实测 2026-11-04：https://webvpn.zstu.edu.cn/ → 302 → /users/sign_in
+    #   与 JSEI（江苏电子信息职业学院）同一套 WebVPN 产品，import_url 做法一致。
+    import_url: "https://webvpn.zstu.edu.cn/"
     maintainer: "constant-er"
-    description: "浙江理工大学教务系统课表导入。需先登录 WebVPN 并点击「教务系统」进入教学管理信息服务平台后再导入。支持选择学年学期，自动读取校历与课程所属校区作息，跨校区课程保留原节次编号并单独使用其校区真实时间。"
+    description: "浙江理工大学教务系统课表导入。请先在打开的 WebVPN 门户页用统一身份认证登录（学号密码/微信/钉钉均可），然后在资源列表点击「教务系统」进入教学管理信息服务平台，在左侧「信息查询」→「个人课表查询」选好学年学期并点「查询」，再回到本页执行导入。支持自动读取校历与课程所属校区作息，跨校区课程保留原节次编号并单独使用其校区真实时间。"

@@ -26,7 +26,14 @@
 const ZSTU_CONFIG = {
     // WebVPN 域名与教务直连域名，按当前页面自动选择
     hosts: {
-        webvpn: ['jwglxt-443.webvpn.zstu.edu.cn'],
+        // WebVPN 门户（登录页、认证页、资源列表）—— import_url 指向这里
+        webvpn: [
+            'webvpn.zstu.edu.cn',                    // ★ WebVPN 门户主页
+            'sso-443.webvpn.zstu.edu.cn',           // 统一身份认证
+            'jwglxt-443.webvpn.zstu.edu.cn',        // 教务系统（正方）
+            'jwglxt.webvpn.zstu.edu.cn'             // 教务系统备用域名
+        ],
+        // 校园网直连（域名不公开，猜的，不影响使用）
         campus: ['jwglxt.zstu.edu.cn', 'jwc.zstu.edu.cn', 'jw.zstu.edu.cn']
     },
     // 正方 V9 功能模块编号
@@ -52,8 +59,41 @@ function zstuText(value) {
 }
 
 /**
- * 根据当前页面域名判断走 WebVPN 还是校园直连，
- * 并校验是否已经进入教务系统（否则抛错提示用户）。
+ * 判断当前是否已处于教务系统（正方）页面。
+ *
+ * 命中条件：域名在白名单内，且路径含 /jwglxt/
+ * - WebVPN 门户首页 (webvpn.zstu.edu.cn/) → false，静默等待
+ * - 统一身份认证页 (sso-443.webvpn...)   → false，静默等待
+ * - 教务系统页 (jwglxt-443.webvpn...)     → true，开始导入
+ */
+function isOnCourseSystemPage() {
+    const host = window.location.hostname;
+    const path = window.location.pathname || '';
+    const all = ZSTU_CONFIG.hosts.webvpn.concat(ZSTU_CONFIG.hosts.campus);
+
+    let matched = false;
+    for (const candidate of all) {
+        if (host === candidate || host.endsWith('.' + candidate)) {
+            matched = true;
+            break;
+        }
+    }
+    if (!matched) return false;
+
+    // 必须已经在正方的 /jwglxt/ 路径下
+    return /\/jwglxt\//.test(path) || /\/jwglxt$/.test(path);
+}
+
+/**
+ * 判断当前页面是否已在教务系统（正方页面）内。
+ *
+ * ★ 浙理工的关键特性（2026-11-04 实测）：
+ *   直接访问 https://jwglxt-443.webvpn.zstu.edu.cn/... 是不行的！
+ *   必须是：先登录 https://webvpn.zstu.edu.cn/ → 在资源列表点「教务系统」
+ *   → 才会跳到 jwglxt-443.webvpn.zstu.edu.cn 并带上有效会话。
+ *   直接进教务系统地址会显示「用户名或密码错误」（因为那是统一身份认证在拦）。
+ *
+ * 因此脚本要在 WebVPN 首页时给出明确引导，而不是笼统报错。
  */
 function getBaseUrl() {
     const host = window.location.hostname;
@@ -69,14 +109,33 @@ function getBaseUrl() {
 
     if (!matched) {
         throw new Error(
-            '请先登录 WebVPN，点击「教务系统」进入教学管理信息服务平台后再导入。' +
+            '当前不是教务系统页面。\n\n' +
+            '请按顺序操作：\n' +
+            '1. 在上方地址栏打开 https://webvpn.zstu.edu.cn/\n' +
+            '2. 用统一身份认证登录（学号密码 / 微信 / 钉钉均可）\n' +
+            '3. 在资源列表点「教务系统」进入教学管理信息服务平台\n' +
+            '4. 左侧「信息查询」→「个人课表查询」，选好学年学期并点「查询」\n' +
+            '5. 回到此页点「执行导入」\n\n' +
             '当前页面域名：' + host
         );
     }
 
-    const isWebvpn = ZSTU_CONFIG.hosts.webvpn.some(function (h) {
+    // 已经在 WebVPN 主页（还没进教务系统）→ 给出更具体的引导
+    const isWebvpnHost = ZSTU_CONFIG.hosts.webvpn.some(function (h) {
         return host === h || host.endsWith('.' + h);
     });
+
+    if (isWebvpnHost && !/jwglxt/.test(host)) {
+        throw new Error(
+            '您当前在 WebVPN 门户页，还没有进入教务系统。\n\n' +
+            '请在上面的资源列表中点击「教务系统」图标进入' +
+            '「教学管理信息服务平台」，然后在左侧「信息查询」→' +
+            '「个人课表查询」选好学年学期点「查询」，再回到此页执行导入。\n\n' +
+            '提示：直接在地址栏输入教务系统地址（' +
+            'https://jwglxt-443.webvpn.zstu.edu.cn/...）是无法登录的，' +
+            '必须从 WebVPN 门户 https://webvpn.zstu.edu.cn/ 点进去。'
+        );
+    }
 
     return window.location.origin + '/jwglxt/';
 }
@@ -130,11 +189,23 @@ async function zstuRequest(path, params, options) {
 
     // 登录态失效判定：被重定向到认证服务器，或页面是统一身份认证页
     const finalUrl = response.url || '';
-    if (/authserver\/|login_slogin|\/users\/auth\/cas/i.test(finalUrl)) {
+    if (/authserver\/|login_slogin|\/users\/auth\/cas|\/users\/sign_in/i.test(finalUrl)) {
         throw new Error('登录已过期，请重新登录 WebVPN 并进入教务系统后重试。');
     }
     if (/<title[^>]*>\s*(统一身份认证|WebVPN|正方)/i.test(text)) {
         throw new Error('当前页面不是教务系统页面，请通过 WebVPN 进入「教务系统」后重试。');
+    }
+
+    // 页面本身在，但内容是登录页（正方的登录页标题不含"正方"两字时用特征判断）
+    if (/login_slogin|统一身份认证|密码错误|用户名或密码/i.test(text.slice(0, 3000))) {
+        throw new Error(
+            '教务系统提示未登录或凭据错误。\n\n' +
+            '浙理工无法直接访问教务系统地址，必须：\n' +
+            '1. 打开 https://webvpn.zstu.edu.cn/ 并登录\n' +
+            '2. 在资源列表点「教务系统」进入教学管理信息服务平台\n' +
+            '3. 左侧「信息查询」→「个人课表查询」，选好学年学期并点「查询」\n' +
+            '4. 回到本页执行导入'
+        );
     }
 
     if (opts.json === false) return text;
@@ -166,9 +237,14 @@ async function zstuSelect(title, entries, defaultIndex) {
 
 async function promptUserToStart() {
     const confirmed = await window.shiguangBridgePromise.showAlert(
-        '导入前请确认',
-        '请确保您已通过 WebVPN 登录，并已点击「教务系统」进入教学管理信息服务平台。\n' +
-        '本适配会自动读取您本学期的课表、校历与校区作息。',
+        '准备导入课表',
+        '请确认您已完成以下步骤：\n\n' +
+        '① 在 WebVPN 门户（webvpn.zstu.edu.cn）完成统一身份认证登录\n' +
+        '② 在资源列表点击「教务系统」，进入教学管理信息服务平台\n' +
+        '③ 左侧「信息查询」→「个人课表查询」，选定学年学期并点「查询」\n' +
+        '④ 确认页面上已显示出课表\n\n' +
+        '（若还没做，请先在上面的网页里完成，再回来点「开始导入」）\n\n' +
+        '本适配会自动读取本学期课表、校历与校区作息时间。',
         '开始导入'
     );
     if (!zstuConfirmed(confirmed)) {
@@ -658,7 +734,17 @@ async function runImportFlow() {
     let savedStage = '';
 
     try {
-        // 0. 前置检查
+        // 0. 前置检查：确认当前已在教务系统页面
+        //
+        // ★ 重要：脚本在每次页面加载完成时都会被注入（拾光 WebView 的机制）。
+        //   用户刚打开 WebVPN 门户时，脚本也会跑一次，但那时还没进教务系统。
+        //   此时必须静默退出，不能弹错误框打断用户 ——
+        //   等用户点进「教务系统」后，脚本会随新页面自动重新注入并正常执行。
+        if (!isOnCourseSystemPage()) {
+            console.log('[ZSTU] 当前不在教务系统页面，等待用户进入教务系统后再自动执行…');
+            return;
+        }
+
         getBaseUrl();
         if (!await promptUserToStart()) return;
 

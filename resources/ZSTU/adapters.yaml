@@ -4,5 +4,5 @@ adapters:
     category: "BACHELOR_AND_ASSOCIATE"
     asset_js_path: "zstu_01.js"
     import_url: "https://jwglxt-443.webvpn.zstu.edu.cn/jwglxt/xtgl/login_slogin.html"
-    maintainer: "你的GitHub用户名"
+    maintainer: "constant-er"
     description: "浙江理工大学教务系统课表导入。需先登录 WebVPN 并点击「教务系统」进入教学管理信息服务平台后再导入。支持选择学年学期，自动读取校历与课程所属校区作息，跨校区课程保留原节次编号并单独使用其校区真实时间。"

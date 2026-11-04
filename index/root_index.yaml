@@ -1357,3 +1357,8 @@ schools:
     name: "电子科技大学中山学院"
     initial: "Z"
     resource_folder: "ZSC"
+    
+  - id: "ZSTU"
+    name: "浙江理工大学"
+    initial: "Z"
+    resource_folder: "ZSTU"

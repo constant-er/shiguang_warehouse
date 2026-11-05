@@ -139,78 +139,52 @@ function getTipStage() {
 }
 
 /**
- * 自动点击「教务系统」入口。
- *
- * 浙理工 WebVPN 门户的资源列表里有一项「教务系统」，
- * 点击后 WebVPN 会为 jwglxt-443.webvpn.zstu.edu.cn 下发授权 cookie 并跳转过去。
- *
- * 策略（不依赖具体 DOM 结构，纯文本匹配，兼容性最好）：
- *   1) 优先点带 jwglxt 链接的元素 → 最准
- *   2) 否则点文本最短的匹配元素 → 避免点到外层容器
- *
- * 返回 true 表示已触发点击。
- */
-function autoClickEducationEntry() {
-    const nodes = window.document.querySelectorAll(
-        'a, li, td, div, span, p, button, i, em, h1, h2, h3, label'
-    );
-
-    let fallback = null;
-
-    for (const el of nodes) {
-        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-        if (!text || text.length > 24) continue;
-        if (!/教务系统|教学管理|教务管理/.test(text)) continue;
-
-        // 有内嵌链接但不是 jwglxt → 记为备选
-        const link = el.closest ? el.closest('a[href]') : null;
-        if (link && /jwglxt/.test(link.getAttribute('href') || '')) {
-            link.click();
-            return true;
-        }
-        if (!el.querySelector('a[href]')) {
-            if (!fallback) fallback = el;
-        }
-    }
-
-    if (fallback) {
-        fallback.click();
-        return true;
-    }
-    return false;
-}
-
-/**
  * 自动点击教务系统左侧菜单里的「个人课表查询」。
  *
  * 本适配直接调接口取课表，其实不强制要求停在课表页；
  * 但进入课表页能确保会话已完全建立，所以这里尽力自动点一下。
  */
 function autoClickScheduleEntry() {
-    const nodes = window.document.querySelectorAll(
-        'a, li, td, span, p, div, i, em, label, strong'
+    const doc = window.document;
+    if (!doc || !doc.querySelectorAll) return false;
+
+    const nodes = doc.querySelectorAll(
+        'a, li, td, span, p, div, i, em, label, strong, font, dt, dd'
     );
 
     let fallback = null;
 
     for (const el of nodes) {
-        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        // 只看元素自身的文本
+        let text = '';
+        for (const child of (el.childNodes || [])) {
+            if (child.nodeType === 3) text += child.textContent || '';
+        }
+        text = text.replace(/\s+/g, ' ').trim();
         if (!text || text.length > 24) continue;
-        if (!/个人课表|课表查询|我的课表|课程表/.test(text)) continue;
+        if (!/个人课表|课表查询|我的课表|课程表查询/.test(text)) continue;
 
         const link = el.closest ? el.closest('a[href]') : null;
-        if (link && /kbcx|Xsgrkb|kbtj/.test(link.getAttribute('href') || '')) {
-            link.click();
-            return true;
+        if (link) {
+            const href = link.getAttribute('href') || '';
+            if (/kbcx|Xsgrkb|kbtj/i.test(href)) {
+                link.click();
+                return true;
+            }
+            if (!fallback) fallback = link;
         }
-        if (!el.querySelector('a[href]')) {
+        if (!el.querySelector || !el.querySelector('a[href]')) {
             if (!fallback) fallback = el;
         }
     }
 
     if (fallback) {
-        fallback.click();
-        return true;
+        try {
+            fallback.click();
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
     return false;
 }
@@ -222,6 +196,64 @@ function autoClickScheduleEntry() {
 function isPortalHost(host) {
     const h = String(host || '').toLowerCase();
     return h === 'webvpn.zstu.edu.cn' || h === 'sslvpn.zstu.edu.cn';
+}
+
+/**
+ * 查找并点击「教务系统」入口。
+ *
+ * 浙理工 WebVPN 的资源列表是异步渲染的，脚本注入时可能还没出现，
+ * 因此这里做「间隔重试」而不是一次就放弃。
+ */
+function findEducationEntry() {
+    const doc = window.document;
+    if (!doc || !doc.querySelectorAll) return null;
+
+    const nodes = doc.querySelectorAll(
+        'a, li, td, div, span, p, button, i, em, h1, h2, h3, label, dt, dd, strong, font'
+    );
+
+    let fallback = null;
+
+    for (const el of nodes) {
+        // 只看元素自身的文本（避免父容器把整个列表都算进来）
+        let text = '';
+        for (const child of (el.childNodes || [])) {
+            if (child.nodeType === 3) text += child.textContent || '';
+        }
+        text = text.replace(/\s+/g, ' ').trim();
+        if (!text || text.length > 24) continue;
+        if (!/教务系统|教学管理|教务管理|教务信息/.test(text)) continue;
+
+        // 优先带 jwglxt 链接的
+        const link = el.closest ? el.closest('a[href]') : null;
+        if (link) {
+            const href = link.getAttribute('href') || '';
+            if (/jwglxt/i.test(href)) return link;
+            if (!fallback) fallback = link;
+        }
+        if (!el.querySelector || !el.querySelector('a[href]')) {
+            if (!fallback) fallback = el;
+        }
+    }
+    return fallback;
+}
+
+/**
+ * 带重试的自动点击「教务系统」。
+ *
+ * 资源列表异步加载 → 单次尝试常常扑空，所以每隔 400ms 重试，
+ * 最多持续 ~12 秒（WebView 会在每次导航后重新注入脚本，天然有重试机会，
+ * 但这里再兜一层更稳）。
+ */
+function autoClickEducationEntry() {
+    const el = findEducationEntry();
+    if (!el) return false;
+    try {
+        el.click();
+        return true;
+    } catch (e) {
+        return false;
+    }
 }
 
 /**
@@ -241,12 +273,13 @@ async function guideToCourseSystem() {
     // ---- 已在教务域 ----
     if (isOnEducationDomain()) {
         if (!/\/jwglxt\//.test(path)) {
-            // 先尝试自动点「个人课表查询」
-            if (getTipStage() !== 'edu') {
-                markTipShown('edu');
-                if (autoClickScheduleEntry()) {
-                    console.log('[ZSTU] 已自动点击「个人课表查询」');
-                } else {
+            // 自动点「个人课表查询」（资源/菜单也是异步渲染的，需要重试）
+            if (autoClickScheduleEntry()) {
+                console.log('[ZSTU] 已自动点击「个人课表查询」');
+            } else {
+                scheduleRetry('edu');
+                if (getTipStage() !== 'edu') {
+                    markTipShown('edu');
                     await window.shiguangBridgePromise.showAlert(
                         '还需一步',
                         '请点击左侧「信息查询」→「个人课表查询」，选好学年学期并点「查询」。',
@@ -266,16 +299,17 @@ async function guideToCourseSystem() {
         if (!looksLikePortalHome()) {
             return false;
         }
-        if (getTipStage() === 'portal') return false;
-        markTipShown('portal');
 
-        // 先尝试自动点「教务系统」
+        // 自动点「教务系统」—— 每次注入都尝试（列表异步渲染，可能这次才有）
         if (autoClickEducationEntry()) {
             console.log('[ZSTU] 已自动点击「教务系统」');
             return false;
         }
 
-        // 点不到 → 提示用户手动点
+        // 点不到 → 排重试 + 提示一次
+        scheduleRetry('portal');
+        if (getTipStage() === 'portal') return false;
+        markTipShown('portal');
         await window.shiguangBridgePromise.showAlert(
             '请进入教务系统',
             '在资源列表点击「教务系统」图标，进入教学管理信息服务平台。',
@@ -285,6 +319,30 @@ async function guideToCourseSystem() {
     }
 
     return false;
+}
+
+/**
+ * 安排一次延迟重试：资源列表 / 左侧菜单可能是异步渲染的，
+ * 首次注入时常常还找不到，稍后再试一次。
+ */
+function scheduleRetry(stage) {
+    const key = 'zstu_retry_' + stage;
+    let count = 0;
+    try {
+        count = parseInt(window.sessionStorage.getItem(key) || '0', 10);
+        if (count >= 20) return;
+        window.sessionStorage.setItem(key, String(count + 1));
+    } catch (e) { /* ignore */ }
+
+    setTimeout(function () {
+        try {
+            if (isPortalHost(window.location.hostname)) {
+                autoClickEducationEntry();
+            } else if (isOnEducationDomain()) {
+                autoClickScheduleEntry();
+            }
+        } catch (e) { /* ignore */ }
+    }, 600);
 }
 
 /**
@@ -1137,6 +1195,17 @@ async function runImportFlow() {
         let note = semester.label + '\n' +
             courses.length + ' 门课程 · ' + baseSlots.length + ' 节作息 · ' +
             config.semesterTotalWeeks + ' 周（起 ' + config.semesterStartDate + '）';
+
+        // 列出教师，便于核对是否导入完整
+        const teacherList = [];
+        for (const c of courses) {
+            if (c.teacher && teacherList.indexOf(c.teacher) < 0) teacherList.push(c.teacher);
+        }
+        if (teacherList.length > 0) {
+            const shown = teacherList.slice(0, 5).join('、');
+            note += '\n教师：' + shown +
+                (teacherList.length > 5 ? ' 等 ' + teacherList.length + ' 位' : '');
+        }
 
         if (customCount > 0) {
             note += '\n' + customCount + ' 门课程使用其所属校区的作息';

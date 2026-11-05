@@ -26,12 +26,12 @@
 const ZSTU_CONFIG = {
     // WebVPN 域名与教务直连域名，按当前页面自动选择
     hosts: {
-        // WebVPN 门户（登录页、认证页、资源列表）—— import_url 指向这里
+        // WebVPN 门户（登录页、认证页、资源列表）—— import_url 指向 webvpn
         webvpn: [
-            'sslvpn.zstu.edu.cn',                    // ★ SSLVPN 门户（import_url 指向这里）
-            'webvpn.zstu.edu.cn',                    // WebVPN 门户（备用）
-            'sso-443.webvpn.zstu.edu.cn',           // 统一身份认证
-            'sso.zstu.edu.cn',                       // 直连统一身份认证
+            'webvpn.zstu.edu.cn',                    // ★ WebVPN 门户（import_url 指向这里）
+            'sso-443.webvpn.zstu.edu.cn',           // 统一身份认证（WebVPN 内）
+            'sso.zstu.edu.cn',                       // 统一身份认证（直连）
+            'sslvpn.zstu.edu.cn',                    // SSLVPN 门户（备用入口）
             'jwglxt-443.webvpn.zstu.edu.cn',        // 教务系统（正方）
             'jwglxt.webvpn.zstu.edu.cn'             // 教务系统备用域名
         ],
@@ -216,6 +216,15 @@ function autoClickScheduleEntry() {
 }
 
 /**
+ * 是否为 WebVPN 门户域名（webvpn / sslvpn）。
+ * 浙理工的门户有两个入口，资源列表结构一致。
+ */
+function isPortalHost(host) {
+    const h = String(host || '').toLowerCase();
+    return h === 'webvpn.zstu.edu.cn' || h === 'sslvpn.zstu.edu.cn';
+}
+
+/**
  * 分阶段引导：自动点击优先，失败才提示。
  *
  * 浙理工的 WebVPN 会话是「门户域 → 资源子域」绑定的：
@@ -251,8 +260,8 @@ async function guideToCourseSystem() {
         return true;
     }
 
-    // ---- 在 WebVPN 门户 ----
-    if (/webvpn\.zstu\.edu\.cn$/.test(host)) {
+    // ---- 在 WebVPN 门户（webvpn.zstu.edu.cn / sslvpn.zstu.edu.cn）----
+    if (isPortalHost(host)) {
         // 未登录时（登录页）不打扰，等登录完再处理
         if (!looksLikePortalHome()) {
             return false;

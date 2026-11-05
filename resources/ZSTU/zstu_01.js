@@ -82,8 +82,210 @@ function isOnCourseSystemPage() {
     }
     if (!matched) return false;
 
+    // 已在教务域下即可开始 —— 本适配直接调接口取课表，
+    // 不必让用户再点「信息查询 → 个人课表查询」
+    if (isOnEducationDomain()) return true;
+
     // 必须已经在正方的 /jwglxt/ 路径下
     return /\/jwglxt\//.test(path) || /\/jwglxt$/.test(path);
+}
+
+/**
+ * 是否已处于「教务系统」（正方）域名下。
+ *
+ * 浙理工的 WebVPN 会为每个资源子域下发独立的授权 cookie，
+ * 因此必须真正进入教务系统域，接口请求才会带上有效会话。
+ */
+function isOnEducationDomain() {
+    const host = window.location.hostname;
+    const eduHosts = [
+        'jwglxt-443.webvpn.zstu.edu.cn',
+        'jwglxt.webvpn.zstu.edu.cn',
+        'jwglxt.zstu.edu.cn',
+        'jwc.zstu.edu.cn',
+        'jw.zstu.edu.cn'
+    ];
+    for (const h of eduHosts) {
+        if (host === h || host.endsWith('.' + h)) return true;
+    }
+    return false;
+}
+
+/**
+ * 分阶段引导提示（浙理工 WebVPN 流程）。
+ *
+ * 浙理工的 WebVPN 会话是「门户域 → 资源子域」绑定的：
+ *   1) 先登录 WebVPN 门户
+ *   2) 在资源列表点「教务系统」→ 进入 jwglxt-443.webvpn.zstu.edu.cn
+ *   3) 左侧「信息查询」→「个人课表查询」→ 选学年学期 → 点「查询」
+ *
+ * 本适配直接调接口取课表，所以第 3 步只要进入教务域即可，
+ * 但仍需提示用户点一次「个人课表查询」以确保会话已建立。
+ *
+ * 每个阶段只提示一次（sessionStorage 去重），避免反复打扰。
+ */
+const ZSTU_TIP_KEY = 'zstu_tip_stage';
+
+function markTipShown(stage) {
+    try {
+        window.sessionStorage.setItem(ZSTU_TIP_KEY, stage);
+    } catch (e) { /* ignore */ }
+}
+
+function getTipStage() {
+    try {
+        return window.sessionStorage.getItem(ZSTU_TIP_KEY) || '';
+    } catch (e) { return ''; }
+}
+
+/**
+ * 自动点击「教务系统」入口。
+ *
+ * 浙理工 WebVPN 门户的资源列表里有一项「教务系统」，
+ * 点击后 WebVPN 会为 jwglxt-443.webvpn.zstu.edu.cn 下发授权 cookie 并跳转过去。
+ *
+ * 策略（不依赖具体 DOM 结构，纯文本匹配，兼容性最好）：
+ *   1) 优先点带 jwglxt 链接的元素 → 最准
+ *   2) 否则点文本最短的匹配元素 → 避免点到外层容器
+ *
+ * 返回 true 表示已触发点击。
+ */
+function autoClickEducationEntry() {
+    const nodes = window.document.querySelectorAll(
+        'a, li, td, div, span, p, button, i, em, h1, h2, h3, label'
+    );
+
+    let fallback = null;
+
+    for (const el of nodes) {
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text || text.length > 24) continue;
+        if (!/教务系统|教学管理|教务管理/.test(text)) continue;
+
+        // 有内嵌链接但不是 jwglxt → 记为备选
+        const link = el.closest ? el.closest('a[href]') : null;
+        if (link && /jwglxt/.test(link.getAttribute('href') || '')) {
+            link.click();
+            return true;
+        }
+        if (!el.querySelector('a[href]')) {
+            if (!fallback) fallback = el;
+        }
+    }
+
+    if (fallback) {
+        fallback.click();
+        return true;
+    }
+    return false;
+}
+
+/**
+ * 自动点击教务系统左侧菜单里的「个人课表查询」。
+ *
+ * 本适配直接调接口取课表，其实不强制要求停在课表页；
+ * 但进入课表页能确保会话已完全建立，所以这里尽力自动点一下。
+ */
+function autoClickScheduleEntry() {
+    const nodes = window.document.querySelectorAll(
+        'a, li, td, span, p, div, i, em, label, strong'
+    );
+
+    let fallback = null;
+
+    for (const el of nodes) {
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text || text.length > 24) continue;
+        if (!/个人课表|课表查询|我的课表|课程表/.test(text)) continue;
+
+        const link = el.closest ? el.closest('a[href]') : null;
+        if (link && /kbcx|Xsgrkb|kbtj/.test(link.getAttribute('href') || '')) {
+            link.click();
+            return true;
+        }
+        if (!el.querySelector('a[href]')) {
+            if (!fallback) fallback = el;
+        }
+    }
+
+    if (fallback) {
+        fallback.click();
+        return true;
+    }
+    return false;
+}
+
+/**
+ * 分阶段引导：自动点击优先，失败才提示。
+ *
+ * 浙理工的 WebVPN 会话是「门户域 → 资源子域」绑定的：
+ *   1) 登录 WebVPN 门户
+ *   2) 点「教务系统」→ 进入 jwglxt-443.webvpn.zstu.edu.cn
+ *   3) 左侧「信息查询」→「个人课表查询」→ 选学年学期 → 点「查询」
+ *
+ * 返回 true 表示已在教务域（可以继续导入）。
+ */
+async function guideToCourseSystem() {
+    const host = window.location.hostname;
+    const path = window.location.pathname || '';
+
+    // ---- 已在教务域 ----
+    if (isOnEducationDomain()) {
+        if (!/\/jwglxt\//.test(path)) {
+            // 先尝试自动点「个人课表查询」
+            if (getTipStage() !== 'edu') {
+                markTipShown('edu');
+                if (autoClickScheduleEntry()) {
+                    console.log('[ZSTU] 已自动点击「个人课表查询」');
+                } else {
+                    await window.shiguangBridgePromise.showAlert(
+                        '还需一步',
+                        '请点击左侧「信息查询」→「个人课表查询」，选好学年学期并点「查询」。',
+                        '知道了'
+                    );
+                }
+            }
+            // 还没到课表页 → 本次不导入，等页面跳转后脚本自动重跑
+            return false;
+        }
+        return true;
+    }
+
+    // ---- 在 WebVPN 门户 ----
+    if (/webvpn\.zstu\.edu\.cn$/.test(host)) {
+        // 未登录时（登录页）不打扰，等登录完再处理
+        if (!looksLikePortalHome()) {
+            return false;
+        }
+        if (getTipStage() === 'portal') return false;
+        markTipShown('portal');
+
+        // 先尝试自动点「教务系统」
+        if (autoClickEducationEntry()) {
+            console.log('[ZSTU] 已自动点击「教务系统」');
+            return false;
+        }
+
+        // 点不到 → 提示用户手动点
+        await window.shiguangBridgePromise.showAlert(
+            '请进入教务系统',
+            '在资源列表点击「教务系统」图标，进入教学管理信息服务平台。',
+            '知道了'
+        );
+        return false;
+    }
+
+    return false;
+}
+
+/**
+ * 粗略判断当前是否为「已登录的门户首页」（有资源列表）。
+ */
+function looksLikePortalHome() {
+    const doc = window.document;
+    const text = (doc && doc.body ? doc.body.innerText || '' : '');
+    if (!text) return false;
+    return /教务系统|教学管理|资源|我的应用|常用系统/.test(text);
 }
 
 /**
@@ -237,20 +439,22 @@ async function zstuSelect(title, entries, defaultIndex) {
     return entries[Number(value)];
 }
 
+/**
+ * 开始导入前的提示。
+ *
+ * 浙理工的 WebVPN 门户 → 教务系统 需要用户手动点击，
+ * 但与其在这里长篇大论地教用户，不如：
+ *   1) 脚本尝试自动点击（见 tryAutoClickEducation）
+ *   2) 自动点击失败时，才用一句话告诉用户要做什么
+ */
 async function promptUserToStart() {
     const confirmed = await window.shiguangBridgePromise.showAlert(
-        '准备导入课表',
-        '请确认您已完成以下步骤：\n\n' +
-        '① 在 WebVPN 门户（webvpn.zstu.edu.cn）完成统一身份认证登录\n' +
-        '② 在资源列表点击「教务系统」，进入教学管理信息服务平台\n' +
-        '③ 左侧「信息查询」→「个人课表查询」，选定学年学期并点「查询」\n' +
-        '④ 确认页面上已显示出课表\n\n' +
-        '（若还没做，请先在上面的网页里完成，再回来点「开始导入」）\n\n' +
-        '本适配会自动读取本学期课表、校历与校区作息时间。',
+        '导入课表',
+        '请在教务系统「个人课表查询」页点「查询」，然后点「开始导入」。',
         '开始导入'
     );
     if (!zstuConfirmed(confirmed)) {
-        window.shiguangBridge.showToast('用户取消了导入。');
+        window.shiguangBridge.showToast('已取消');
         return false;
     }
     return true;
@@ -542,9 +746,13 @@ async function fetchCourses(semester) {
 /**
  * 解析课表数据。
  * ✅ 已用浙理工真实响应验证字段（2026-11-04 实测）：
- *   kcmc 课程名 | xm 教师（多人逗号分隔）| cdmc 教室 | xqj 星期(1-7)
+ *   kcmc 课程名 | xm 教师(多人逗号分隔)| cdmc 教室 | xqj 星期(1-7)
  *   jcs 节次("1-8") | zcd 周次("1-16周") | xf 学分 | xqh_id 校区ID | xqmc 校区名
  *   kcxszc "讲课:28,实验:4" | kclb 课程类别 | kch 课程号 | jxbmc 教学班
+ *
+ * ★ 数据结构严格对齐「正方通用适配器」：
+ *   传给 App 的对象只含 {name, teacher, position, day, startSection, endSection, weeks, credit}
+ *   内部需要的 campusId / courseCode 放在 meta 里，不混进课程对象。
  *
  * 注意：同一门课可能出现多条记录（不同星期/周次段/校区），
  * 每条是独立的上课时段，应分别导入，不能合并。
@@ -582,16 +790,17 @@ function parseCourses(data) {
             if (isFinite(credit) && credit >= 0) course.credit = credit;
         }
 
-        // 记录课程号，方便后续与资料平台按课程号关联
+        // 课程号 → 供后续与资料平台按课程代码关联
         const code = zstuText(row.kch);
         if (code && !courseCodes.has(name)) courseCodes.set(name, code);
-        if (code) course.courseCode = code;
-
-        // 记录所属校区，供作息不一致时按校区精确匹配
-        course.campusId = campusId;
 
         courses.push(course);
-        if (campusId && campusName) campuses.set(campusId, campusName);
+
+        // 校区信息单独存放，不混进课程对象
+        if (campusId && campusName) {
+            campuses.set(campusId, campusName);
+            course.__campusId = campusId;
+        }
     }
 
     if (courses.length === 0) {
@@ -603,6 +812,31 @@ function parseCourses(data) {
         courseCodes: courseCodes,
         unscheduled: Array.isArray(data.sjkList) ? data.sjkList : []
     };
+}
+
+/**
+ * 剥离仅供脚本内部使用的字段（__ 前缀），得到可直接交给 App 的纯课程数组。
+ * 与「正方通用适配器」保持一致：App 只认标准字段。
+ */
+function toAppCourses(courses) {
+    return courses.map(function (c) {
+        const out = {
+            name: c.name,
+            teacher: c.teacher,
+            position: c.position,
+            day: c.day,
+            startSection: c.startSection,
+            endSection: c.endSection,
+            weeks: c.weeks
+        };
+        if (typeof c.credit === 'number') out.credit = c.credit;
+        if (c.isCustomTime) {
+            out.isCustomTime = true;
+            out.customStartTime = c.customStartTime;
+            out.customEndTime = c.customEndTime;
+        }
+        return out;
+    });
 }
 
 // ============================================================
@@ -732,36 +966,74 @@ async function importPresetTimeSlots(slots) {
     }
 }
 
+/**
+ * 防重入锁。
+ *
+ * 拾光在每次页面加载完成时都会重新注入脚本（WebCompatDelegate.onPageFinished）。
+ * 用户在 WebVPN 门户与教务页之间来回切换时，脚本会被注入多次，
+ * 导致重复弹窗、甚至重复导入。
+ *
+ * 用 sessionStorage 做标记（同一 WebView 会话内共享，跨页面跳转仍有效）。
+ */
+const ZSTU_LOCK_KEY = 'zstu_import_running';
+
+function acquireImportLock() {
+    try {
+        if (window.sessionStorage.getItem(ZSTU_LOCK_KEY)) return false;
+        window.sessionStorage.setItem(ZSTU_LOCK_KEY, String(Date.now()));
+        return true;
+    } catch (e) {
+        // 隐私模式下 sessionStorage 可能不可用 → 不阻断流程
+        return true;
+    }
+}
+
+function releaseImportLock() {
+    try {
+        window.sessionStorage.removeItem(ZSTU_LOCK_KEY);
+    } catch (e) { /* ignore */ }
+}
+
 async function runImportFlow() {
     let savedStage = '';
 
     try {
-        // 0. 前置检查：确认当前已在教务系统页面
+        // 0. 前置检查 + 分阶段引导
         //
-        // ★ 重要：脚本在每次页面加载完成时都会被注入（拾光 WebView 的机制）。
-        //   用户刚打开 WebVPN 门户时，脚本也会跑一次，但那时还没进教务系统。
-        //   此时必须静默退出，不能弹错误框打断用户 ——
-        //   等用户点进「教务系统」后，脚本会随新页面自动重新注入并正常执行。
+        // ★ 脚本在每次页面加载完成时都会被注入（拾光 WebView 的机制）。
+        //   在 WebVPN 门户页 → 提示用户点「教务系统」，然后静默等待
+        //   在教务系统域   → 若还没进 /jwglxt/ 路径，提示点「个人课表查询」
+        //   两者都满足     → 开始导入
+        if (!(await guideToCourseSystem())) {
+            console.log('[ZSTU] 等待用户完成 WebVPN → 教务系统 的导航…');
+            return;
+        }
+
         if (!isOnCourseSystemPage()) {
-            console.log('[ZSTU] 当前不在教务系统页面，等待用户进入教务系统后再自动执行…');
+            console.log('[ZSTU] 尚未进入教务系统页面，等待…');
+            return;
+        }
+
+        // 防重入：同一会话内只跑一次
+        if (!acquireImportLock()) {
+            console.log('[ZSTU] 导入流程已在运行中，忽略本次重复触发。');
             return;
         }
 
         getBaseUrl();
-        if (!await promptUserToStart()) return;
+        if (!await promptUserToStart()) { releaseImportLock(); return; }
+
+        zstuToast('正在读取课表…');
 
         // 1. 选择学年学期
-        zstuToast('正在读取学年学期列表…');
         const semester = await selectAcademicYearAndSemester();
-        if (!semester) { zstuToast('导入已取消'); return; }
+        if (!semester) { releaseImportLock(); zstuToast('已取消'); return; }
 
         // 2. 读取课表（自动尝试学年/学期的不同取值格式）
-        zstuToast('正在读取本学期课表…');
         const raw = await fetchCourses(semester);
         const parsed = parseCourses(raw);
 
         // 3. 读取校历（使用与课表相同的学期取值，保证口径一致）
-        zstuToast('正在读取校历与开学日期…');
         const config = await fetchSemesterStartDate(semester.year, semester.term);
 
         // 4. 读取各校区作息
@@ -852,35 +1124,27 @@ async function runImportFlow() {
             courses.push(course);
         }
 
-        // 7. 展示确认信息
+        // 7. 展示确认信息（精简：只给关键数字，详细列表在 App 里能看到）
         let note = semester.label + '\n' +
-            courses.length + ' 条课程时段\n' +
-            '作息：' + baseCampusLabel + '，共 ' + baseSlots.length + ' 节\n' +
-            '第一周周一：' + config.semesterStartDate + '\n' +
-            '校历周数：' + config.semesterTotalWeeks + ' 周';
-
-        note += '\n\n作息时间：';
-        for (const slot of baseSlots) {
-            note += '\n第 ' + slot.number + ' 节 ' + slot.startTime + '-' + slot.endTime;
-        }
+            courses.length + ' 门课程 · ' + baseSlots.length + ' 节作息 · ' +
+            config.semesterTotalWeeks + ' 周（起 ' + config.semesterStartDate + '）';
 
         if (customCount > 0) {
-            note += '\n\n另有 ' + customCount + ' 条课程按其所属校区的真实时间导入，并保留原节次编号。';
+            note += '\n' + customCount + ' 门课程使用其所属校区的作息';
         }
 
         if (parsed.unscheduled.length > 0) {
-            note += '\n\n以下课程尚无固定上课时间，本次不导入：';
-            for (const row of parsed.unscheduled) {
-                // 浙理工实测字段：kcmc 课程名 / qsjsz 起止周描述 / jsxm 教师
-                const teacher = parseTeachers(row.jsxm);
-                note += '\n' + zstuText(row.kcmc) +
-                    (teacher ? '（' + teacher + ' ' : '（') +
-                    zstuText(row.qsjsz) + '）';
-            }
+            const names = parsed.unscheduled.slice(0, 4).map(function (row) {
+                return zstuText(row.kcmc);
+            }).filter(Boolean);
+            note += '\n未排时间（不导入）：' +
+                names.join('、') +
+                (parsed.unscheduled.length > names.length
+                    ? ' 等 ' + parsed.unscheduled.length + ' 门' : '');
         }
 
-        const confirmed = await window.shiguangBridgePromise.showAlert('核对导入信息', note, '确认导入');
-        if (!zstuConfirmed(confirmed)) { zstuToast('导入已取消'); return; }
+        const confirmed = await window.shiguangBridgePromise.showAlert('确认导入', note, '导入');
+        if (!zstuConfirmed(confirmed)) { zstuToast('已取消'); return; }
 
         // 8. 依次保存
         const configOk = await window.shiguangBridgePromise.saveCourseConfig(JSON.stringify(config));
@@ -890,13 +1154,8 @@ async function runImportFlow() {
         await importPresetTimeSlots(baseSlots);
         savedStage = '学期配置和作息';
 
-        // 移除仅供脚本内部使用的 campusId，不把无关字段传给 App
-        // （App 侧 ignoreUnknownKeys = true，多传也不会崩，但保持干净）
-        for (const course of courses) {
-            delete course.campusId;
-        }
-
-        await saveCourses(courses);
+        // 剥掉内部字段，只传 App 认识的标准字段（与正方通用适配器一致）
+        await saveCourses(toAppCourses(courses));
 
         zstuToast('已导入 ' + courses.length + ' 条课程时段及 ' + baseSlots.length + ' 节作息');
         window.shiguangBridge.notifyTaskCompletion();
@@ -944,8 +1203,9 @@ function areSchedulesIdentical(schedules) {
  * 注意：不能只按节次数量匹配，否则会拿到别的校区的作息，导致跨校区时间修正失效。
  */
 function findCourseSlots(schedules, course) {
-    if (course.campusId && schedules.has(course.campusId)) {
-        return schedules.get(course.campusId);
+    const cid = course.__campusId;
+    if (cid && schedules.has(cid)) {
+        return schedules.get(cid);
     }
 
     const candidates = [];

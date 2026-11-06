@@ -137,214 +137,6 @@ function getTipStage() {
         return window.sessionStorage.getItem(ZSTU_TIP_KEY) || '';
     } catch (e) { return ''; }
 }
-
-/**
- * 自动点击教务系统左侧菜单里的「个人课表查询」。
- *
- * 本适配直接调接口取课表，其实不强制要求停在课表页；
- * 但进入课表页能确保会话已完全建立，所以这里尽力自动点一下。
- */
-function autoClickScheduleEntry() {
-    const doc = window.document;
-    if (!doc || !doc.querySelectorAll) return false;
-
-    const nodes = doc.querySelectorAll(
-        'a, li, td, span, p, div, i, em, label, strong, font, dt, dd'
-    );
-
-    let fallback = null;
-
-    for (const el of nodes) {
-        // 只看元素自身的文本
-        let text = '';
-        for (const child of (el.childNodes || [])) {
-            if (child.nodeType === 3) text += child.textContent || '';
-        }
-        text = text.replace(/\s+/g, ' ').trim();
-        if (!text || text.length > 24) continue;
-        if (!/个人课表|课表查询|我的课表|课程表查询/.test(text)) continue;
-
-        const link = el.closest ? el.closest('a[href]') : null;
-        if (link) {
-            const href = link.getAttribute('href') || '';
-            if (/kbcx|Xsgrkb|kbtj/i.test(href)) {
-                link.click();
-                return true;
-            }
-            if (!fallback) fallback = link;
-        }
-        if (!el.querySelector || !el.querySelector('a[href]')) {
-            if (!fallback) fallback = el;
-        }
-    }
-
-    if (fallback) {
-        try {
-            fallback.click();
-            return true;
-        } catch (e) {
-            return false;
-        }
-    }
-    return false;
-}
-
-/**
- * 是否为 WebVPN 门户域名（webvpn / sslvpn）。
- * 浙理工的门户有两个入口，资源列表结构一致。
- */
-function isPortalHost(host) {
-    const h = String(host || '').toLowerCase();
-    return h === 'webvpn.zstu.edu.cn' || h === 'sslvpn.zstu.edu.cn';
-}
-
-/**
- * 查找并点击「教务系统」入口。
- *
- * 浙理工 WebVPN 的资源列表是异步渲染的，脚本注入时可能还没出现，
- * 因此这里做「间隔重试」而不是一次就放弃。
- */
-function findEducationEntry() {
-    const doc = window.document;
-    if (!doc || !doc.querySelectorAll) return null;
-
-    const nodes = doc.querySelectorAll(
-        'a, li, td, div, span, p, button, i, em, h1, h2, h3, label, dt, dd, strong, font'
-    );
-
-    let fallback = null;
-
-    for (const el of nodes) {
-        // 只看元素自身的文本（避免父容器把整个列表都算进来）
-        let text = '';
-        for (const child of (el.childNodes || [])) {
-            if (child.nodeType === 3) text += child.textContent || '';
-        }
-        text = text.replace(/\s+/g, ' ').trim();
-        if (!text || text.length > 24) continue;
-        if (!/教务系统|教学管理|教务管理|教务信息/.test(text)) continue;
-
-        // 优先带 jwglxt 链接的
-        const link = el.closest ? el.closest('a[href]') : null;
-        if (link) {
-            const href = link.getAttribute('href') || '';
-            if (/jwglxt/i.test(href)) return link;
-            if (!fallback) fallback = link;
-        }
-        if (!el.querySelector || !el.querySelector('a[href]')) {
-            if (!fallback) fallback = el;
-        }
-    }
-    return fallback;
-}
-
-/**
- * 带重试的自动点击「教务系统」。
- *
- * 资源列表异步加载 → 单次尝试常常扑空，所以每隔 400ms 重试，
- * 最多持续 ~12 秒（WebView 会在每次导航后重新注入脚本，天然有重试机会，
- * 但这里再兜一层更稳）。
- */
-function autoClickEducationEntry() {
-    const el = findEducationEntry();
-    if (!el) return false;
-    try {
-        el.click();
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-/**
- * 分阶段引导：自动点击优先，失败才提示。
- *
- * 浙理工的 WebVPN 会话是「门户域 → 资源子域」绑定的：
- *   1) 登录 WebVPN 门户
- *   2) 点「教务系统」→ 进入 jwglxt-443.webvpn.zstu.edu.cn
- *   3) 左侧「信息查询」→「个人课表查询」→ 选学年学期 → 点「查询」
- *
- * 返回 true 表示已在教务域（可以继续导入）。
- */
-async function guideToCourseSystem() {
-    const host = window.location.hostname;
-    const path = window.location.pathname || '';
-
-    // ---- 已在教务域 ----
-    if (isOnEducationDomain()) {
-        if (!/\/jwglxt\//.test(path)) {
-            // 自动点「个人课表查询」（资源/菜单也是异步渲染的，需要重试）
-            if (autoClickScheduleEntry()) {
-                console.log('[ZSTU] 已自动点击「个人课表查询」');
-            } else {
-                scheduleRetry('edu');
-                if (getTipStage() !== 'edu') {
-                    markTipShown('edu');
-                    await window.shiguangBridgePromise.showAlert(
-                        '还需一步',
-                        '请点击左侧「信息查询」→「个人课表查询」，选好学年学期并点「查询」。',
-                        '知道了'
-                    );
-                }
-            }
-            // 还没到课表页 → 本次不导入，等页面跳转后脚本自动重跑
-            return false;
-        }
-        return true;
-    }
-
-    // ---- 在 WebVPN 门户（webvpn.zstu.edu.cn / sslvpn.zstu.edu.cn）----
-    if (isPortalHost(host)) {
-        // 未登录时（登录页）不打扰，等登录完再处理
-        if (!looksLikePortalHome()) {
-            return false;
-        }
-
-        // 自动点「教务系统」—— 每次注入都尝试（列表异步渲染，可能这次才有）
-        if (autoClickEducationEntry()) {
-            console.log('[ZSTU] 已自动点击「教务系统」');
-            return false;
-        }
-
-        // 点不到 → 排重试 + 提示一次
-        scheduleRetry('portal');
-        if (getTipStage() === 'portal') return false;
-        markTipShown('portal');
-        await window.shiguangBridgePromise.showAlert(
-            '请进入教务系统',
-            '在资源列表点击「教务系统」图标，进入教学管理信息服务平台。',
-            '知道了'
-        );
-        return false;
-    }
-
-    return false;
-}
-
-/**
- * 安排一次延迟重试：资源列表 / 左侧菜单可能是异步渲染的，
- * 首次注入时常常还找不到，稍后再试一次。
- */
-function scheduleRetry(stage) {
-    const key = 'zstu_retry_' + stage;
-    let count = 0;
-    try {
-        count = parseInt(window.sessionStorage.getItem(key) || '0', 10);
-        if (count >= 20) return;
-        window.sessionStorage.setItem(key, String(count + 1));
-    } catch (e) { /* ignore */ }
-
-    setTimeout(function () {
-        try {
-            if (isPortalHost(window.location.hostname)) {
-                autoClickEducationEntry();
-            } else if (isOnEducationDomain()) {
-                autoClickScheduleEntry();
-            }
-        } catch (e) { /* ignore */ }
-    }, 600);
-}
-
 /**
  * 粗略判断当前是否为「已登录的门户首页」（有资源列表）。
  */
@@ -507,18 +299,16 @@ async function zstuSelect(title, entries, defaultIndex) {
 }
 
 /**
- * 开始导入前的提示。
+ * 开始导入前的确认。
  *
- * 浙理工的 WebVPN 门户 → 教务系统 需要用户手动点击，
- * 但与其在这里长篇大论地教用户，不如：
- *   1) 脚本尝试自动点击（见 tryAutoClickEducation）
- *   2) 自动点击失败时，才用一句话告诉用户要做什么
+ * 脚本执行时用户已经停在教务系统的课表页（拾光在选完课表后才执行脚本），
+ * 所以这里不需要教用户怎么做，只确认一下要导入哪个学期。
  */
 async function promptUserToStart() {
     const confirmed = await window.shiguangBridgePromise.showAlert(
-        '导入课表',
-        '请在教务系统「个人课表查询」页点「查询」，然后点「开始导入」。',
-        '开始导入'
+        '开始导入',
+        '将读取当前账号的课表、校历与作息。',
+        '开始'
     );
     if (!zstuConfirmed(confirmed)) {
         window.shiguangBridge.showToast('已取消');
@@ -1065,25 +855,35 @@ async function runImportFlow() {
     let savedStage = '';
 
     try {
-        // 0. 前置检查 + 分阶段引导
+        // 0. 前置检查
         //
-        // ★ 脚本在每次页面加载完成时都会被注入（拾光 WebView 的机制）。
-        //   在 WebVPN 门户页 → 提示用户点「教务系统」，然后静默等待
-        //   在教务系统域   → 若还没进 /jwglxt/ 路径，提示点「个人课表查询」
-        //   两者都满足     → 开始导入
-        if (!(await guideToCourseSystem())) {
-            console.log('[ZSTU] 等待用户完成 WebVPN → 教务系统 的导航…');
-            return;
-        }
-
-        if (!isOnCourseSystemPage()) {
-            console.log('[ZSTU] 尚未进入教务系统页面，等待…');
-            return;
-        }
+        // ★ 关键（2026-11-06 源码确认 WebViewScreen.kt:382）：
+        //   拾光的适配器脚本**只在用户选完目标课表后才执行一次**：
+        //     onTableSelected → 读本地 zstu_01.js → executeScript(...)
+        //   所以执行到这里时，用户已经登录 WebVPN、已进入教务系统、
+        //   并停在课表页 —— 这里不需要任何前置引导，更不需要自动点击。
+        //
+        //   之前误以为脚本会在每次页面加载时注入，于是加了「静默等待 + 自动点击」，
+        //   结果把脚本自己拦死了（第一步就 return，什么都没做）→ 表现为「没有教师信息」。
 
         // 防重入：同一会话内只跑一次
         if (!acquireImportLock()) {
             console.log('[ZSTU] 导入流程已在运行中，忽略本次重复触发。');
+            return;
+        }
+
+        // 不在教务系统域 → 用户没走完 WebVPN 流程，给一次明确指引
+        if (!isOnEducationDomain() && !isOnCourseSystemPage()) {
+            releaseImportLock();
+            await window.shiguangBridgePromise.showAlert(
+                '还没进入教务系统',
+                '请先在上面的网页里完成：\n' +
+                '① 登录 https://webvpn.zstu.edu.cn/\n' +
+                '② 在资源列表点「教务系统」进入教学管理信息服务平台\n' +
+                '③ 左侧「信息查询」→「个人课表查询」，选好学年学期并点「查询」\n' +
+                '④ 回到这里点「执行导入」',
+                '知道了'
+            );
             return;
         }
 

@@ -1,0 +1,8 @@
+adapters:
+  - adapter_id: "ZSTU_01"
+    adapter_name: "浙江理工大学本科教务（WebVPN）"
+    category: "BACHELOR_AND_ASSOCIATE"
+    asset_js_path: "zstu_01.js"
+    import_url: "https://webvpn.zstu.edu.cn/"
+    maintainer: "社区贡献"
+    description: "登录 WebVPN，点击教务管理系统，进入学生课表查询并查询对应学期后执行导入，同时导入学校 12 节作息。"

@@ -693,6 +693,11 @@ schools:
     initial: "X"
     resource_folder: "XJZFU"
 
+  - id: "ZSTU"
+    name: "浙江理工大学"
+    initial: "Z"
+    resource_folder: "ZSTU"
+
   - id: "ZJUT"
     name: "浙江工业大学"
     initial: "Z"
